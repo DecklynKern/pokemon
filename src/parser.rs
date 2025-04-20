@@ -136,7 +136,7 @@ pub fn parse_showdown(showdown_export_lines: &[&str], data_handler: &DataHandler
         id: form_id,
         level,
         ability,
-        held_item,
+        item: held_item,
         max_hp: hp,
         hp,
         attack,
@@ -145,7 +145,8 @@ pub fn parse_showdown(showdown_export_lines: &[&str], data_handler: &DataHandler
         special_defense,
         speed,
         moves,
-        status: None,
+        non_volatile_status: None,
+        volatile_status: VolatileStatus::default(),
         gender,
         friendship
     }

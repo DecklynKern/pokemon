@@ -3541,7 +3541,7 @@ impl Item {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MoveTarget {
-    SpecificMove,
+    SpecificMove = 1,
     SelectedPokemonMeFirst,
     Ally,
     UsersField,
@@ -3554,7 +3554,14 @@ pub enum MoveTarget {
     AllOpponents,
     EntireField,
     UserAndAllies,
-    AllPokemon
+    AllPokemon,
+    AllAllies
+}
+
+impl MoveTarget {
+    pub fn from_db_id(id: u8) -> Self {
+        unsafe {std::mem::transmute(id)}
+    }
 }
 
 #[repr(u16)]

@@ -102,10 +102,40 @@ pub struct Pokemon {
     pub special_defense: u16,
     pub speed: u16,
     pub moves: [Option<ID>; 4],
-    pub status: Option<NonVolatileStatus>,
-    pub held_item: Option<Item>,
+    pub non_volatile_status: Option<NonVolatileStatus>,
+    pub volatile_status: VolatileStatus,
+    pub item: Option<Item>,
     pub gender: Gender,
     pub friendship: u8
+}
+
+impl Pokemon {
+    
+    pub fn get_stat(&self, stat: Stat) -> u16 {
+
+        let stat_stages = self.volatile_status.stat_stages[stat as usize];
+
+        let mut stat_val = match stat {
+            Stat::Evasion | Stat::Accuracy => todo!(),
+            Stat::Attack => self.attack,
+            Stat::Defense => self.defense,
+            Stat::SpecialAttack => self.special_attack,
+            Stat::SpecialDefense => self.special_defense,
+            Stat::Speed => self.speed
+        };
+
+        if stat_stages < 0 {
+            stat_val *= 2;
+            stat_val /= 2 + (-stat_stages as u16);
+        }
+        else if stat_stages > 0 {
+            stat_val *= 2 + stat_stages as u16;
+            stat_val /= 2;
+        }
+
+        stat_val
+
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -145,7 +175,7 @@ pub enum NonVolatileStatus {
 
 #[derive(Debug, Clone, Copy)]
 pub enum VolatileStatusEffect {
-    AbilityChange(ID),
+    AbilityChange(Ability),
     AbilitySuppression,
     TypeChange(!),
     Mimic,
@@ -218,7 +248,7 @@ pub enum Stat {
 
 const NUM_STATS: usize = std::mem::variant_count::<Stat>();
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VolatileStatus {
     pub stat_stages: [i8; NUM_STATS],
     pub effects: Vec<VolatileStatusEffect>
@@ -229,6 +259,42 @@ impl VolatileStatus {
         Self {
             stat_stages: [0; NUM_STATS],
             effects: Vec::new()
+        }
+    }
+
+    pub fn add(&mut self, effect: VolatileStatusEffect) {
+        self.effects.push(effect);
+    }
+
+    pub fn decriment_counters(&mut self) {
+
+        for idx in (0..self.effects.len()).rev() {
+            
+            let effect = &mut self.effects[idx];
+
+            let turns = match effect {
+                VolatileStatusEffect::Bind {health_fraction :_, turns} | 
+                VolatileStatusEffect::PerishSong(turns) |
+                VolatileStatusEffect::LaserFocus(turns) |
+                VolatileStatusEffect::Disable(turns) |
+                VolatileStatusEffect::Embargo(turns) |
+                VolatileStatusEffect::HealBlock(turns) |
+                VolatileStatusEffect::Taunt(turns) |
+                VolatileStatusEffect::ThroatChop(turns) |
+                VolatileStatusEffect::Torment(turns) |
+                VolatileStatusEffect::Confusion(turns) |
+                VolatileStatusEffect::Encore(turns) |
+                VolatileStatusEffect::Uproar(turns) |
+                VolatileStatusEffect::Bide(_, turns)
+                    => turns,
+                _ => continue
+            };
+
+            *turns -= 1;
+
+            if *turns == 0 {
+                self.effects.remove(idx);
+            }
         }
     }
 }
@@ -254,9 +320,8 @@ pub enum Terrain {
     Misty
 }
 
-macro_rules! fields {
-    ($type:ty [$start_bit:expr]) => {};
-    ($type:ty [$start_bit:expr] 1 $(|$bits:literal)* $read_fn:ident $set_fn:ident $($tok:tt)*) => {
+macro_rules! fields_inner {
+    (bool $type:ty [$start_bit:expr] [$($bits:tt)*] $read_fn:ident $set_fn:ident $($name:ident)*) => {
 
         pub fn $read_fn(&self) -> bool {
             self.0 << ($start_bit) >> (Self::NUM_BITS - 1) != 0
@@ -268,9 +333,9 @@ macro_rules! fields {
             self.0 |= (value as $type) << shift;
         }
 
-        fields!($type [$start_bit + 1] $($bits)|* $($tok)*);
+        fields!($type [$start_bit + 1] [$($bits)*] $($name)*);
     };
-    ($type:ty [$start_bit:expr] $size:literal $(|$bits:literal)* $read_fn:ident $set_fn:ident $($tok:tt)*) => {
+    (u8 $type:ty [$start_bit:expr] [$size:literal $($bits:tt)*] $read_fn:ident $set_fn:ident $($name:ident)*) => {
 
         pub fn $read_fn(&self) -> u8 {
             (self.0 << ($start_bit) >> (Self::NUM_BITS - $size)) as u8
@@ -282,12 +347,22 @@ macro_rules! fields {
             self.0 |= (value as $type) << shift;
         }
 
-        fields!($type [$start_bit + $size] $($bits)|* $($tok)*);
+        fields!($type [$start_bit + $size] [$($bits)*] $($name)*);
     }
 }
 
+macro_rules! fields {
+    ($type:ty [$start_bit:expr] []) => {};
+    ($type:ty [$start_bit:expr] [1 $($bits:tt)*] $($name:ident)*) => {
+        fields_inner!(bool $type [$start_bit] [$($bits)*] $($name)*);
+    };
+    ($type:ty [$start_bit:expr] [$($bits:tt)*] $($name:ident)*) => {
+        fields_inner!(u8 $type [$start_bit] [$($bits)*] $($name)*);
+    };
+}
+
 macro_rules! bitfield {
-    ($name:ident($type:ty); $($tok:tt)+) => {
+    ($name:ident($type:ty); $($bits:tt)|+ $($read_fn:ident $set_fn:ident)+) => {
         
         #[derive(Debug)]
         pub struct $name($type);
@@ -297,7 +372,7 @@ macro_rules! bitfield {
             pub fn default() -> Self {
                 Self(0)
             }
-            fields!($type [0] $($tok)+);
+            fields!($type [0] [$($bits)+] $($read_fn $set_fn)+);
         }
     }
 }
@@ -359,326 +434,31 @@ impl MoveClass {
     }
 }
 
-// bitfield!(
-//     MoveFlags(u32);
-//     1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1
-//     get_contact set_contact
-//     get_charge set_charge
-//     get_recharge set_recharge
-//     get_protect set_protect
-//     get_reflectable set_reflectable
-//     get_snatch set_snatch
-//     get_mirror set_mirror
-//     get_punch set_punch
-//     get_sound set_sound
-//     get_gravity set_gravity
-//     get_defrost set_defrost
-//     get_distance set_distance
-//     get_heal set_heal
-//     get_authentic set_authentic
-//     get_powder set_powder
-//     get_bite set_bite
-//     get_pulse set_pulse
-//     get_ballistics set_ballistics
-//     get_mental set_mental
-//     get_non_sky_battle set_non_sky_battle
-//     get_dance set_dance
-// );
-
-#[derive(Debug)]
-pub struct MoveFlags(u32);
-
-impl MoveFlags {
-    const NUM_BITS: usize = std::mem::size_of::<u32>() * 8;
-    pub fn default() -> Self {
-        Self(0)
-    }
-    pub fn get_contact(&self) -> bool {
-        self.0 << (0) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_contact(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - (0);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_charge(&self) -> bool {
-        self.0 << (0 + 1) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_charge(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - (0 + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_recharge(&self) -> bool {
-        self.0 << ((0 + 1) + 1) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_recharge(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - ((0 + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_protect(&self) -> bool {
-        self.0 << (((0 + 1) + 1) + 1) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_protect(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - (((0 + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_reflectable(&self) -> bool {
-        self.0 << ((((0 + 1) + 1) + 1) + 1) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_reflectable(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - ((((0 + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_snatch(&self) -> bool {
-        self.0 << (((((0 + 1) + 1) + 1) + 1) + 1) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_snatch(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - (((((0 + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_mirror(&self) -> bool {
-        self.0 << ((((((0 + 1) + 1) + 1) + 1) + 1) + 1) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_mirror(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - ((((((0 + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_punch(&self) -> bool {
-        self.0 << (((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_punch(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - (((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_sound(&self) -> bool {
-        self.0 << ((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) >> (Self::NUM_BITS - 1) != 0
-    }
-    pub fn set_sound(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - ((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_gravity(&self) -> bool {
-        self.0 << (((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_gravity(&mut self, value: bool) {
-        let shift = Self::NUM_BITS - 1 - (((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_defrost(&self) -> bool {
-        self.0 << ((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_defrost(&mut self, value: bool) {
-        let shift =
-            Self::NUM_BITS - 1 - ((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_distance(&self) -> bool {
-        self.0 << (((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_distance(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - (((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_heal(&self) -> bool {
-        self.0 << ((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_heal(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - ((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_authentic(&self) -> bool {
-        self.0 << (((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_authentic(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - (((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_powder(&self) -> bool {
-        self.0
-            << ((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_powder(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - ((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_bite(&self) -> bool {
-        self.0
-            << (((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_bite(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - (((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_pulse(&self) -> bool {
-        self.0
-            << ((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_pulse(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - ((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_ballistics(&self) -> bool {
-        self.0
-            << (((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_ballistics(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - (((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_mental(&self) -> bool {
-        self.0
-            << ((((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_mental(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - ((((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_non_sky_battle(&self) -> bool {
-        self.0
-            << (((((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_non_sky_battle(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - (((((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-    pub fn get_dance(&self) -> bool {
-        self.0
-            << ((((((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-            >> (Self::NUM_BITS - 1)
-            != 0
-    }
-    pub fn set_dance(&mut self, value: bool) {
-        let shift = Self::NUM_BITS
-            - 1
-            - ((((((((((((((((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1)
-                + 1);
-        self.0 &= !(1 << shift);
-        self.0 |= (value as u32) << shift;
-    }
-}
+bitfield!(
+    MoveFlags(u32);
+    1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1|1
+    get_contact set_contact
+    get_charge set_charge
+    get_recharge set_recharge
+    get_protect set_protect
+    get_reflectable set_reflectable
+    get_snatch set_snatch
+    get_mirror set_mirror
+    get_punch set_punch
+    get_sound set_sound
+    get_gravity set_gravity
+    get_defrost set_defrost
+    get_distance set_distance
+    get_heal set_heal
+    get_authentic set_authentic
+    get_powder set_powder
+    get_bite set_bite
+    get_pulse set_pulse
+    get_ballistics set_ballistics
+    get_mental set_mental
+    get_non_sky_battle set_non_sky_battle
+    get_dance set_dance
+);
 
 pub struct Move {
     pub id: ID,
@@ -688,7 +468,7 @@ pub struct Move {
     pub power: Option<u8>,
     pub accuracy: Option<u8>,
     pub effect: Option<(MoveEffect, u8)>,
-    // pub target: MoveTarget,
+    pub target: MoveTarget,
     pub flags: MoveFlags
 }
 

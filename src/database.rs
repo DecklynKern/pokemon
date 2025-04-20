@@ -218,6 +218,7 @@ impl DataHandler {
             let priority = moves.get_cell(row, "priority");
             let power = moves.get_cell::<String>(row, "power").parse::<u8>().ok();
             let accuracy = moves.get_cell::<String>(row, "accuracy").parse::<u8>().ok();
+            let target = MoveTarget::from_db_id(moves.get_cell(row, "target_id"));
 
             move_table.insert(id, Move {
                 id,
@@ -227,6 +228,7 @@ impl DataHandler {
                 power,
                 accuracy,
                 effect: None, // todo
+                target,
                 flags: MoveFlags::default()
             });
         }
