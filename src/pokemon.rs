@@ -1,4 +1,4 @@
-use crate::db_enums::*;
+use crate::{bitfield, db_enums::*, log};
 
 pub type ID = std::num::NonZeroU16;
 
@@ -92,6 +92,7 @@ impl PokemonData {
 #[derive(Debug, Clone)]
 pub struct Pokemon {
     pub id: ID,
+    pub name: Box<str>,
     pub level: u8,
     pub ability: Ability,
     pub hp: u16,
@@ -110,6 +111,39 @@ pub struct Pokemon {
 }
 
 impl Pokemon {
+
+    pub fn apply_stat_changes(&mut self, stat: Stat, stages: i8) {
+        
+        self.volatile_status.stat_stages[stat as usize] = (self.volatile_status.stat_stages[stat as usize] + stages).clamp(-6, 6);
+
+        log!(
+            "{}'s {:?} {}!",
+            self.name,
+            stat,
+            match stages {
+                ..=-3 => "severely fell",
+                -2 => "harshly fell",
+                -1 => "fell",
+                0 => unreachable!(),
+                1 => "rose",
+                2 => "rose sharply",
+                3.. => "rose drastically",
+            }
+        );
+
+    }
+
+    pub fn reset_stat_changes(&mut self) {
+        self.volatile_status.stat_stages.fill(0);
+    }
+
+    pub fn deal_damage(&mut self, damage: u16) {
+        self.hp = self.hp.saturating_sub(damage);
+    }
+
+    pub fn heal(&mut self, hp: u16) {
+        self.hp = self.max_hp.min(self.hp + hp);
+    }
     
     pub fn get_stat(&self, stat: Stat) -> u16 {
 
@@ -198,7 +232,7 @@ pub enum VolatileStatusEffect {
     Ingrain,
     LaserFocus(u8),
     Aim,
-    Drowsy,
+    Drowsy(u8),
     Charge,
     Stockpile(u8),
     DefenseCurl,
@@ -262,8 +296,17 @@ impl VolatileStatus {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.stat_stages = [0; NUM_STATS];
+        self.effects.clear();
+    }
+
     pub fn add(&mut self, effect: VolatileStatusEffect) {
+        
+        // needs a lot of work
+        
         self.effects.push(effect);
+
     }
 
     pub fn decriment_counters(&mut self) {
@@ -312,69 +355,21 @@ pub enum Weather {
     StrongWind,
 }
 
+impl Weather {
+
+    pub const PERMANENT: u8 = u8::MAX;
+
+    pub fn is_strong(self) -> bool {
+        matches!(self, Self::ExtremeSun | Self::HeavyRain | Self::StrongWind)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Terrain {
     Electric,
     Grassy,
     Psychic,
     Misty
-}
-
-macro_rules! fields_inner {
-    (bool $type:ty [$start_bit:expr] [$($bits:tt)*] $read_fn:ident $set_fn:ident $($name:ident)*) => {
-
-        pub fn $read_fn(&self) -> bool {
-            self.0 << ($start_bit) >> (Self::NUM_BITS - 1) != 0
-        }
-
-        pub fn $set_fn(&mut self, value: bool) {
-            let shift = Self::NUM_BITS - 1 - ($start_bit);
-            self.0 &= !(1 << shift);
-            self.0 |= (value as $type) << shift;
-        }
-
-        fields!($type [$start_bit + 1] [$($bits)*] $($name)*);
-    };
-    (u8 $type:ty [$start_bit:expr] [$size:literal $($bits:tt)*] $read_fn:ident $set_fn:ident $($name:ident)*) => {
-
-        pub fn $read_fn(&self) -> u8 {
-            (self.0 << ($start_bit) >> (Self::NUM_BITS - $size)) as u8
-        }
-
-        pub fn $set_fn(&mut self, value: u8) {
-            let shift = Self::NUM_BITS - ($start_bit) - $size;
-            self.0 &= !(!(!0 << ($size)) << shift);
-            self.0 |= (value as $type) << shift;
-        }
-
-        fields!($type [$start_bit + $size] [$($bits)*] $($name)*);
-    }
-}
-
-macro_rules! fields {
-    ($type:ty [$start_bit:expr] []) => {};
-    ($type:ty [$start_bit:expr] [1 $($bits:tt)*] $($name:ident)*) => {
-        fields_inner!(bool $type [$start_bit] [$($bits)*] $($name)*);
-    };
-    ($type:ty [$start_bit:expr] [$($bits:tt)*] $($name:ident)*) => {
-        fields_inner!(u8 $type [$start_bit] [$($bits)*] $($name)*);
-    };
-}
-
-macro_rules! bitfield {
-    ($name:ident($type:ty); $($bits:tt)|+ $($read_fn:ident $set_fn:ident)+) => {
-        
-        #[derive(Debug)]
-        pub struct $name($type);
-
-        impl $name {
-            const NUM_BITS: usize = std::mem::size_of::<$type>() * 8;
-            pub fn default() -> Self {
-                Self(0)
-            }
-            fields!($type [0] [$($bits)+] $($read_fn $set_fn)+);
-        }
-    }
 }
 
 // ABBCCDEEEEFFFFGGGGHHHIIIIJJJKKKL
@@ -462,18 +457,14 @@ bitfield!(
 
 pub struct Move {
     pub id: ID,
+    pub name: Box<str>,
     pub class: MoveClass,
     pub move_type: Type,
     pub priority: i8,
     pub power: Option<u8>,
     pub accuracy: Option<u8>,
-    pub effect: Option<(MoveEffect, u8)>,
+    pub effect: MoveEffect,
+    pub effect_chance: Option<u8>,
     pub target: MoveTarget,
     pub flags: MoveFlags
-}
-
-impl Move {
-    pub fn has_effect(&self, effect: MoveEffect) -> bool {
-        self.effect.is_some_and(|(move_effect, _)| move_effect == effect)
-    }
 }

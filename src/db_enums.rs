@@ -3761,7 +3761,7 @@ pub enum MoveEffect {
     IncreasedCritAndPoisonChance,
     WaterSport,
     RaiseUserSpecialAttackSpecialDefense1,
-    RaiseUserAttackSpeed1,
+    DragonDance,
     Camouflage,
     Roost,
     Gravity,

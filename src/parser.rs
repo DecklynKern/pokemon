@@ -56,10 +56,29 @@ pub fn parse_showdown(showdown_export_lines: &[&str], data_handler: &DataHandler
         line1 = display_name;
     }
 
-    if let Some((display_name, gender_display)) = line1.split_once('(') {
-        gender = Gender::from_char(gender_display.chars().next().unwrap());
-        line1 = display_name;
+    let split = line1.split('(').map(|string| string.trim()).collect::<Box<[_]>>();
+
+    let mut gender = Gender::Male;
+
+    let (form_name, name) = if split.len() == 1 {
+        (split[0], split[0])
     }
+    else if split.len() == 2 {
+
+        let second = split[1].trim_end_matches(')');
+
+        if second == "M" || second == "F" {
+            gender = Gender::from_char(second.chars().next().unwrap());
+            (split[0], split[0])
+        }
+        else {
+            (split[1], split[0])
+        }
+    }
+    else {
+        gender = Gender::from_char(split[2].chars().next().unwrap());
+        (split[1].trim_end_matches(')'), split[0])
+    };
 
     let form_name = line1.trim();
 
@@ -134,6 +153,7 @@ pub fn parse_showdown(showdown_export_lines: &[&str], data_handler: &DataHandler
     
     Pokemon {
         id: form_id,
+        name: name.into(),
         level,
         ability,
         item: held_item,
@@ -150,4 +170,28 @@ pub fn parse_showdown(showdown_export_lines: &[&str], data_handler: &DataHandler
         gender,
         friendship
     }
+}
+
+pub fn parse_showdown_team(block: &str, data_handler: &DataHandler) -> Vec<Pokemon> {
+
+    let mut team = Vec::new();
+    let mut mon_lines = Vec::new();
+
+    for line in block.trim().split('\n') {
+        
+        if line.is_empty() {
+            team.push(parse_showdown(&mon_lines, &data_handler));
+            mon_lines.clear();
+        }
+        else {
+            mon_lines.push(line);
+        }
+    }
+
+    if !mon_lines.is_empty() {
+        team.push(parse_showdown(&mon_lines, &data_handler));
+    }
+    
+    team
+
 }

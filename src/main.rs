@@ -3,6 +3,8 @@
 #![feature(tuple_trait)]
 #![feature(concat_idents)]
 
+#[macro_use]
+mod bitfield;
 mod db_enums;
 mod pokemon;
 mod database;
@@ -10,90 +12,105 @@ mod battle;
 mod sim;
 mod parser;
 mod controller;
+mod logging;
 
 use database::*;
 use battle::*;
 use parser::*;
 
-const TEAM: &'static str = "Gallade-Mega (M) @ Galladite  
-Ability: Justified  
-EVs: 224 HP / 32 Atk / 252 Spe  
-Jolly Nature  
-- Swords Dance  
-- Shadow Sneak  
-- Psycho Cut  
-- Drain Punch  
+const MY_TEAM: &'static str = "
+Volcarona @ Miracle Seed
+Level: 65
+Careful Nature
+Ability: Flame Body
+EVs: 20 HP / 20 Def / 252 SpA / 20 SpD / 100 Spe
+IVs: 2 HP / 29 Atk / 19 Def / 22 SpA / 19 SpD / 6 Spe
+- Quiver Dance
+- Flamethrower
+- Signal Beam
+- Giga Drain";
 
-Serperior @ Chesto Berry  
-Ability: Contrary  
-EVs: 200 HP / 44 Def / 12 SpA / 252 Spe  
-Timid Nature  
-IVs: 1 Atk / 30 Def / 30 SpD / 30 Spe  
-- Rest  
-- Glare  
-- Hidden Power [Rock]  
-- Leaf Storm  
+const IRIS_TEAM: &'static str = "
+Hydreigon @ Wise Glasses
+Level: 57
+Modest Nature
+Ability: Levitate
+IVs: 30 HP / 30 Atk / 30 Def / 30 SpA / 30 SpD / 30 Spe
+- Dragon Pulse
+- Fire Blast
+- Focus Blast
+- Surf
 
-Crawdaunt @ Life Orb  
-Ability: Adaptability  
-EVs: 252 Atk / 4 SpD / 252 Spe  
-Jolly Nature  
-- Swords Dance  
-- Aqua Jet  
-- Crabhammer  
-- Knock Off  
+Druddigon @ Life Orb
+Level: 57
+Naughty Nature
+Ability: Sheer Force
+IVs: 30 HP / 30 Atk / 30 Def / 30 SpA / 30 SpD / 30 Spe
+- Fire Punch
+- Focus Blast
+- Outrage
+- Thunder Punch
 
-Excadrill @ Leftovers  
-Ability: Mold Breaker  
-EVs: 128 Atk / 176 SpD / 204 Spe  
-Adamant Nature  
-- Rapid Spin  
-- Substitute  
-- Iron Head  
-- Earthquake  
+Aggron @ Muscle Band
+Level: 57
+Careful Nature
+Ability: Rock Head
+IVs: 30 HP / 30 Atk / 30 Def / 30 SpA / 30 SpD / 30 Spe
+- Head Smash
+- Double-Edge
+- Earthquake
+- Autotomize
 
-Zapdos @ Leftovers  
-Ability: Static  
-EVs: 248 HP / 236 Def / 24 Spe  
-Bold Nature  
-IVs: 0 Atk / 30 Def  
-- Roost  
-- Hidden Power [Ice]  
-- Heat Wave  
-- Volt Switch  
+Archeops @ Flying Gem
+Level: 57
+Brave Nature
+Ability: Defeatist
+IVs: 30 HP / 30 Atk / 30 Def / 30 SpA / 30 SpD / 30 Spe
+- Acrobatics
+- Dragon Claw
+- Stone Edge
+- Endeavor
 
-Clefable @ Leftovers  
-Ability: Magic Guard  
-EVs: 248 HP / 200 Def / 56 SpD / 4 Spe  
-Calm Nature  
-IVs: 0 Atk  
-- Stealth Rock  
-- Soft-Boiled  
-- Healing Wish  
-- Moonblast 
-";
+Lapras @ Wide Lens
+Level: 57
+Hasty Nature
+Ability: Water Absorb
+IVs: 30 HP / 30 Atk / 30 Def / 30 SpA / 30 SpD / 30 Spe
+- Hydro Pump
+- Blizzard
+- Thunder
+- Sing
+
+Haxorus @ Focus Sash
+Level: 59
+Docile Nature
+Ability: Mold Breaker
+IVs: 30 HP / 30 Atk / 30 Def / 30 SpA / 30 SpD / 30 Spe
+- Earthquake
+- Outrage
+- X-Scissor
+- Dragon Dance";
+
+static mut DATA_HANDLER: Option<DataHandler> = None;
+
+fn get_data_handler() -> &'static DataHandler {
+    unsafe {
+        DATA_HANDLER.as_ref().unwrap()
+    }
+}
 
 fn main() -> std::io::Result<()> {
 
-    let data_handler = DataHandler::new()?;
-
-    let mut team = Vec::new();
-    let mut mon_lines = Vec::new();
-
-    for line in TEAM.split('\n') {
-        
-        if line.is_empty() {
-            team.push(parse_showdown(&mon_lines, &data_handler));
-            mon_lines.clear();
-        }
-        else {
-            mon_lines.push(line);
-        }
+    unsafe {
+        DATA_HANDLER = Some(DataHandler::new()?);
     }
 
-    let team2 = team.clone();
+    =
 
-    let mut battle = Battle::new_battle(&data_handler, team, team2, 5);
+    let my_team = parse_showdown_team(MY_TEAM, get_data_handler());
+    let iris_team = parse_showdown_team(IRIS_TEAM, get_data_handler());
+
+    let mut battle = Battle::new_battle(get_data_handler(), my_team, iris_team, 5);
     battle.simulate();
 
     Ok(())

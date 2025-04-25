@@ -216,18 +216,23 @@ impl DataHandler {
             let move_type = Type::from_db_id(moves.get_cell(row, "type_id"));
             let class = MoveClass::from_db_id(moves.get_cell(row, "damage_class_id"));
             let priority = moves.get_cell(row, "priority");
-            let power = moves.get_cell::<String>(row, "power").parse::<u8>().ok();
-            let accuracy = moves.get_cell::<String>(row, "accuracy").parse::<u8>().ok();
+            let power = moves.get_cell::<String>(row, "power").parse().ok();
+            let accuracy = moves.get_cell::<String>(row, "accuracy").parse().ok();
+            let effect = MoveEffect::from_db_id(moves.get_cell::<String>(row, "effect_id").parse().unwrap_or(ID::new(1).unwrap()));
+            let effect_chance = moves.get_cell::<String>(row, "effect_chance").parse().ok();
             let target = MoveTarget::from_db_id(moves.get_cell(row, "target_id"));
+            let identifier = moves.get_cell::<String>(row, "identifier");
 
             move_table.insert(id, Move {
                 id,
+                name: identifier.into_boxed_str(),
                 class,
                 move_type,
                 priority,
                 power,
                 accuracy,
-                effect: None, // todo
+                effect,
+                effect_chance,
                 target,
                 flags: MoveFlags::default()
             });

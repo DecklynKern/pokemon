@@ -1,3 +1,4 @@
+use crate::db_enums::*;
 use crate::sim::*;
 use crate::database::*;
 use crate::pokemon::*;
@@ -7,8 +8,7 @@ use crate::controller::*;
 pub struct Side {
     pub team: Vec<Pokemon>,
     pub effects: SideEffects,
-    pub active_pokemon: usize,
-    pub volatile_status: VolatileStatus
+    pub active_pokemon: usize
 }
 
 impl Side {
@@ -17,8 +17,7 @@ impl Side {
         Self {
             team: pokemon,
             effects: SideEffects::default(),
-            active_pokemon: 0,
-            volatile_status: VolatileStatus::default()
+            active_pokemon: 0
         }
     }
 
@@ -28,14 +27,6 @@ impl Side {
 
     pub fn get_active_mut(&mut self) -> &mut Pokemon {
         &mut self.team[self.active_pokemon]
-    }
-
-    pub fn apply_stat_changes(&mut self, stat: Stat, stages: i8) {
-        self.volatile_status.stat_stages[stat as usize] = (self.volatile_status.stat_stages[stat as usize] + stages).clamp(-6, 6);
-    }
-
-    pub fn reset_stat_changes(&mut self) {
-        self.volatile_status.stat_stages.fill(0);
     }
 
     pub fn try_apply_status(&mut self, status: NonVolatileStatus) {
@@ -62,14 +53,17 @@ impl Conditions {
         }
     }
 
-    pub decriment_counters(&mut self) -> {
+    pub fn decriment_counters(&mut self) {
 
         if let Some((_, turns)) = &mut self.weather {
-            
-            *turns -= 1;
 
-            if turns == 0 {
-                self.weather = None;
+            if *turns != Weather::PERMANENT {
+                   
+                *turns -= 1;
+                
+                if *turns == 0 {
+                    self.weather = None;
+                }
             }
         }
 
@@ -77,7 +71,7 @@ impl Conditions {
 
             *turns -= 1;
 
-            if turns == 0 {
+            if *turns == 0 {
                 self.terrain = None;
             }
         }
@@ -122,37 +116,45 @@ pub enum BattleAction {
     Item(ID)
 }
 
-pub struct Battle<'a> {
+pub struct Battle {
     state: BattleState,
-    simulator: Simulator<'a>,
+    simulator: Simulator,
     controller1: Box<dyn Controller>,
     controller2: Box<dyn Controller>
 }
 
-impl<'a> Battle<'a> {
+impl Battle {
 
-    pub fn new_battle(data_handler: &'a DataHandler, side1_pokemon: Vec<Pokemon>, side2_pokemon: Vec<Pokemon>, generation: u8) -> Self {
+    pub fn new_battle(data_handler: &'static DataHandler, side1_pokemon: Vec<Pokemon>, side2_pokemon: Vec<Pokemon>, generation: u8) -> Self {
         Self {
             state: BattleState::new(side1_pokemon, side2_pokemon),
             simulator: Simulator::new(data_handler, generation),
-            controller1: Box::new(RandomController::new()),
-            controller2: Box::new(RandomController::new())
+            controller1: Box::new(TextController::new(&data_handler)),
+            controller2: Box::new(TextController::new(&data_handler)),
+            //controller2: Box::new(RandomController::new())
         }
+    }
+
+    pub fn battle_ended(&self) -> bool {
+        false
     }
 
     pub fn simulate(&mut self) {
 
-        let side1_action = self.controller1.get_action(&self.state);
-        let side2_action = self.controller1.get_action(&self.state);
+        while !self.battle_ended() {
 
-        self.simulator.simulate_turn(side1_action, side2_action, &mut self.state);
+            let side1_action = self.controller1.get_action(&self.state, true);
+            let side2_action = self.controller2.get_action(&self.state, false);
     
-        if self.state.side1.get_active().hp == 0 {
-            self.state.side1.active_pokemon = self.controller1.get_switch_in(&self.state) as usize;
-        }
+            self.simulator.simulate_turn(side1_action, side2_action, &mut self.state);
         
-        if self.state.side2.get_active().hp == 0 {
-            self.state.side2.active_pokemon = self.controller2.get_switch_in(&self.state) as usize;
+            if self.state.side1.get_active().hp == 0 {
+                self.state.side1.active_pokemon = self.controller1.get_switch_in(&self.state, true) as usize;
+            }
+            
+            if self.state.side2.get_active().hp == 0 {
+                self.state.side2.active_pokemon = self.controller2.get_switch_in(&self.state, false) as usize;
+            }
         }
     }
 }

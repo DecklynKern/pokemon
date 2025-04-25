@@ -1,5 +1,6 @@
 use crate::db_enums::*;
 use crate::database::*;
+use crate::log;
 use crate::pokemon::*;
 use crate::battle::*;
 
@@ -13,14 +14,19 @@ macro_rules! find_effect {
     };
 }
 
-pub struct Simulator<'a> {
-    data_handler: &'a DataHandler,
+pub struct HitProperties {
+    crit: bool,
+    roll_percent: u8,
+}
+
+pub struct Simulator {
+    data_handler: &'static DataHandler,
     pub generation: u8
 }
 
-impl<'a> Simulator<'a> {
+impl Simulator {
 
-    pub fn new(data_handler: &'a DataHandler, generation: u8) -> Self {
+    pub fn new(data_handler: &'static DataHandler, generation: u8) -> Self {
         Self {
             data_handler,
             generation
@@ -34,11 +40,15 @@ impl<'a> Simulator<'a> {
         });
 
         find_effect!(pokemon, VolatileStatusEffect::AbilityChange(ability) => {
-            return ability;
-        })
+            return *ability;
+        });
     
         pokemon.ability
     
+    }
+
+    fn pokemon_has_type(&self, pokemon: &Pokemon, check_type: Type) -> bool {
+        todo!()
     }
 
     // protosynthesis/quark drive??????
@@ -50,11 +60,6 @@ impl<'a> Simulator<'a> {
         let ability = self.get_ability(pokemon, conditions);
 
         match ability {
-            Ability::PurePower | Ability::HugePower => attack *= 2,
-            Ability::Hustle => {
-                attack *= 3;
-                attack /= 2;
-            }
             Ability::FlowerGift => if conditions.is_sunny() {
                 attack *= 3;
                 attack /= 2;
@@ -67,10 +72,15 @@ impl<'a> Simulator<'a> {
                 attack *= 3;
                 attack /= 2;
             }
+            Ability::Hustle => {
+                attack *= 3;
+                attack /= 2;
+            }
             Ability::OrichalcumPulse => if conditions.is_sunny() {
                 attack *= 5461;
                 attack /= 4096;
             }
+            Ability::PurePower | Ability::HugePower => attack *= 2,
             _ => {}
         }
 
@@ -197,6 +207,11 @@ impl<'a> Simulator<'a> {
             }
         }
 
+        if self.generation >= 4 && conditions.is_weather(Weather::Sandstorm) && self.pokemon_has_type(pokemon, Type::Rock) {
+            special_defense *= 3;
+            special_defense /= 2;
+        }
+
         special_defense
 
     }
@@ -208,12 +223,12 @@ impl<'a> Simulator<'a> {
         let ability = self.get_ability(pokemon, conditions);
 
         match ability {
-            Ability::SwiftSwim if conditions.is_rain() => speed *= 2,
             Ability::Chlorophyll if conditions.is_sunny() => speed *= 2,
-            Ability::SurgeSurfer if conditions.is_terrain(Terrain::Electric) => speed *= 2,
-            Ability::SwiftSwim if conditions.is_weather(Weather::Hail) => speed *= 2,
-            Ability::SandRush if conditions.is_weather(Weather::Sandstorm) => speed *= 2,
             Ability::QuickFeet if pokemon.non_volatile_status.is_some() => speed *= 2,
+            Ability::SandRush if conditions.is_weather(Weather::Sandstorm) => speed *= 2,
+            Ability::SlushRush if conditions.is_weather(Weather::Hail) => speed *= 2,
+            Ability::SurgeSurfer if conditions.is_terrain(Terrain::Electric) => speed *= 2,
+            Ability::SwiftSwim if conditions.is_rain() => speed *= 2,
             _ => {}
         }
 
@@ -255,7 +270,7 @@ impl<'a> Simulator<'a> {
         // if used_move.has_effect(MoveEffect::BodyPress) {
         //     attacker.defense
         // } else
-        if used_move.has_effect(MoveEffect::FoulPlay) {
+        if used_move.effect == MoveEffect::FoulPlay {
             self.get_attack_stat(defender, &conditions)
         }
         else if used_move.class == MoveClass::Physical {
@@ -268,7 +283,7 @@ impl<'a> Simulator<'a> {
 
     fn get_defending_stat(&self, used_move: &Move, attacker: &Pokemon, defender: &Pokemon, conditions: &Conditions) -> u16 {
 
-        if used_move.class == MoveClass::Physical || used_move.has_effect(MoveEffect::Psyshock) {
+        if used_move.class == MoveClass::Physical || used_move.effect == MoveEffect::Psyshock {
             self.get_defense_stat(defender, conditions)
         }
         else {
@@ -282,20 +297,20 @@ impl<'a> Simulator<'a> {
 
         let attacker_ability = self.get_ability(attacker, conditions);
 
-        if used_move.has_effect(MoveEffect::Return) {
+        if used_move.effect == MoveEffect::Return {
             power = (attacker.friendship as u32) * 5 / 2;
         }
-        else if used_move.has_effect(MoveEffect::Frustration) {
+        else if used_move.effect == MoveEffect::Frustration {
             power = (255 - attacker.friendship as u32) * 5 / 2;
         }
 
         let mut modifier = 4096;
 
         if
-            used_move.has_effect(MoveEffect::Facade) && attacker.non_volatile_status.is_some() ||
-            used_move.has_effect(MoveEffect::Brine) && defender.hp <= defender.max_hp / 2 ||
-            used_move.has_effect(MoveEffect::Acrobatics) && attacker.item.is_none() ||
-            used_move.has_effect(MoveEffect::Venoshock) && matches!(defender.non_volatile_status, Some(NonVolatileStatus::Poison | NonVolatileStatus::BadlyPoison))
+            used_move.effect == MoveEffect::Acrobatics && attacker.item.is_none() ||
+            used_move.effect == MoveEffect::Brine && defender.hp <= defender.max_hp / 2 ||
+            used_move.effect == MoveEffect::Facade && attacker.non_volatile_status.is_some() ||
+            used_move.effect == MoveEffect::Venoshock && matches!(defender.non_volatile_status, Some(NonVolatileStatus::Poison | NonVolatileStatus::BadlyPoison))
             // retaliate
             // fusion moves
         {
@@ -371,22 +386,22 @@ impl<'a> Simulator<'a> {
             }
 
             if matches!((used_move.move_type, item), 
-                (Type::Ground,      Item::SoftSand | Item::EarthPlate) |
-                (Type::Rock,        Item::HardStone | Item::StonePlate) |
-                (Type::Grass,       Item::MiracleSeed | Item::MeadowPlate) |
                 (Type::Dark,        Item::BlackGlasses | Item::DreadPlate) |
-                (Type::Fighting,    Item::BlackBelt | Item::FistPlate) |
-                (Type::Electric,    Item::Magnet | Item::ZapPlate) |
-                (Type::Water,       Item::MysticWater | Item::SplashPlate) |
-                (Type::Flying,      Item::SharpBeak | Item::SkyPlate) |
-                (Type::Poison,      Item::PoisonBarb | Item::ToxicPlate) |
-                (Type::Ice,         Item::NeverMeltIce | Item::IciclePlate) |
-                (Type::Ghost,       Item::SpellTag | Item::SpookyPlate) |
-                (Type::Psychic,     Item::TwistedSpoon | Item::MindPlate) |
-                (Type::Fire,        Item::Charcoal | Item::FlamePlate) |
                 (Type::Dragon,      Item::DragonFang | Item::DracoPlate) |
+                (Type::Electric,    Item::Magnet | Item::ZapPlate) |
+                (Type::Fairy,       Item::FairyFeather | Item::PixiePlate) |
+                (Type::Fighting,    Item::BlackBelt | Item::FistPlate) |
+                (Type::Fire,        Item::Charcoal | Item::FlamePlate) |
+                (Type::Flying,      Item::SharpBeak | Item::SkyPlate) |
+                (Type::Ghost,       Item::SpellTag | Item::SpookyPlate) |
+                (Type::Grass,       Item::MiracleSeed | Item::MeadowPlate) |
+                (Type::Ground,      Item::SoftSand | Item::EarthPlate) |
+                (Type::Ice,         Item::NeverMeltIce | Item::IciclePlate) |
                 (Type::Normal,      Item::SilkScarf) | 
-                (Type::Fairy,       Item::FairyFeather | Item::PixiePlate)
+                (Type::Poison,      Item::PoisonBarb | Item::ToxicPlate) |
+                (Type::Psychic,     Item::TwistedSpoon | Item::MindPlate) |
+                (Type::Rock,        Item::HardStone | Item::StonePlate) |
+                (Type::Water,       Item::MysticWater | Item::SplashPlate)
             ) {
                 power *= 4505;
                 power /= 4096;
@@ -418,8 +433,37 @@ impl<'a> Simulator<'a> {
         }
     }
 
+    fn do_contact(&self, attacker: &mut Pokemon, defender: &mut Pokemon, conditions: &Conditions) {
+
+        // baneful bunker, beak blast, burning bulwark, kings shield, obstruct, silk trap, spiky shield
+
+        match self.get_ability(defender, conditions) {
+            // Ability::CuteCharm if rand::random_ratio(3, 10) => attacker.volatile_status.add(VolatileStatusEffect::Infatuation),
+            Ability::EffectSpore if rand::random_ratio(3, 10) && attacker.non_volatile_status.is_none() =>
+                attacker.non_volatile_status = Some([NonVolatileStatus::Poison, NonVolatileStatus::Paralysis, NonVolatileStatus::Sleep][rand::random_range(0..3)]),
+            Ability::FlameBody if rand::random_ratio(3, 10) && attacker.non_volatile_status.is_none() =>
+                attacker.non_volatile_status = Some(NonVolatileStatus::Burn),
+            Ability::Gooey | Ability::TanglingHair => attacker.apply_stat_changes(Stat::Speed, -1),
+            Ability::IronBarbs | Ability::RoughSkin => defender.deal_damage(defender.max_hp / 8),
+            Ability::Mummy => attacker.volatile_status.add(VolatileStatusEffect::AbilityChange(Ability::Mummy)),
+            Ability::PerishBody => todo!(),
+            Ability::Pickpocket => todo!(),
+            Ability::PoisonPoint if rand::random_ratio(3, 10) && attacker.non_volatile_status.is_none() =>
+                attacker.non_volatile_status = Some(NonVolatileStatus::Poison),
+            Ability::PoisonTouch if rand::random_ratio(3, 10) && defender.non_volatile_status.is_none() =>
+                defender.non_volatile_status = Some(NonVolatileStatus::Poison),
+            Ability::Static if rand::random_ratio(3, 10) && defender.non_volatile_status.is_none() =>
+                defender.non_volatile_status = Some(NonVolatileStatus::Paralysis),
+            Ability::WanderingSpirit => todo!(),
+            _ => {}
+        }
+
+
+
+    }
+
     //    Damage=((2×Level5+2)×Power×AD50+2)×Targets×PB×Weather×GlaiveRush×Critical×random×STAB×Type×Burn×other×ZMove×TeraShield
-    fn calc_damage(&self, used_move: &Move, attacker: &Pokemon, defender: &Pokemon, conditions: &Conditions) -> u16 {
+    pub fn calc_damage_inner(&self, used_move: &Move, attacker: &Pokemon, defender: &Pokemon, conditions: &Conditions, hit_properties: HitProperties) -> u16 {
 
         let attack_stat = self.get_attacking_stat(used_move, attacker, defender, conditions) as u32;
         let defense_stat = self.get_defending_stat(used_move, attacker, defender, conditions) as u32;
@@ -451,12 +495,11 @@ impl<'a> Simulator<'a> {
             damage *= 2;
         }
 
-        // crit
-        if rand::random_ratio(1, 16) {
+        if hit_properties.crit {
             damage *= 2;
         }
 
-        damage *= rand::random_range(85..=100);
+        damage *= hit_properties.roll_percent as u32;
         damage /= 100;
 
         // stab
@@ -465,13 +508,25 @@ impl<'a> Simulator<'a> {
             damage /= 2;
         }
 
-        damage *= self.data_handler.type_chart.get(used_move.move_type, defender_data.type1) as u32;
-        damage /= 100;
+        let mut type_effectiveness = self.data_handler.type_chart.get(used_move.move_type, defender_data.type1) as u32;
 
         if let Some(type2) = defender_data.type2 {
-            damage *= self.data_handler.type_chart.get(used_move.move_type, type2) as u32;
-            damage /= 100;
+            type_effectiveness *= self.data_handler.type_chart.get(used_move.move_type, type2) as u32;
+            type_effectiveness /= 100;
         }
+
+        if type_effectiveness > 100 {
+            log!("It's super effective!");
+        }
+        else if type_effectiveness == 0 {
+            log!("It doesn't affect...");
+        }
+        else if type_effectiveness < 100 {
+            log!("It's not very effective...");
+        }
+
+        damage *= type_effectiveness;
+        damage /= 100;
 
         // burn
         if used_move.class == MoveClass::Physical && attacker.non_volatile_status == Some(NonVolatileStatus::Burn) {
@@ -483,17 +538,37 @@ impl<'a> Simulator<'a> {
 
         let mut damage_u16 = damage as u16;
 
-        if used_move.has_effect(MoveEffect::FalseSwipe) && damage_u16 >= defender.hp {
+        if used_move.effect == MoveEffect::FalseSwipe && damage_u16 >= defender.hp {
             damage_u16 = defender.hp;
         }
         
         damage_u16
-    
+
     }
 
-    fn deal_damage(&self, side: &mut Side, mut damage: u16, used_move: &Move, conditions: &Conditions) {
+    fn calc_damage(&self, used_move: &Move, attacker: &Pokemon, defender: &Pokemon, conditions: &Conditions) -> u16 {
 
-        let defender = side.get_active_mut();
+        let crit = rand::random_ratio(1, 16);
+
+        if crit {
+            log!("A critical hit!");
+        }
+
+        let roll_percent = rand::random_range(85..=100);
+        
+        let hit_properties = HitProperties {
+            crit,
+            roll_percent
+        };
+
+        self.calc_damage_inner(used_move, attacker, defender, conditions, hit_properties)
+        
+    }
+
+    fn do_move_hit(&self, used_side: &mut Side, other_side: &mut Side, mut damage: u16, used_move: &Move, conditions: &Conditions) {
+
+        let attacker = used_side.get_active_mut();
+        let defender = other_side.get_active_mut();
 
         let defender_ability = self.get_ability(&defender, conditions);
 
@@ -504,61 +579,152 @@ impl<'a> Simulator<'a> {
                     damage = defender.hp - 1;
                 }
                 else if defender.item == Some(Item::FocusSash) {
+                    log!("{} held on using their Focus Sash!", defender.name);
                     damage = defender.hp - 1;
                     defender.item = None;
                 }
             }
 
             if defender.item == Some(Item::FocusBand) && rand::random_ratio(1, 10) {
+                log!("{} held on using their Focus Band!", defender.name);
                 damage = defender.hp - 1;
             }
         }
 
-        defender.hp = defender.hp.saturating_sub(damage);
+        defender.deal_damage(damage);
 
         if defender.hp == 0 {
-            // faint stuff
+            log!("{} fainted!", defender.name);
         }
 
         if used_move.move_type == Type::Dark && defender_ability == Ability::Justified {
-            side.apply_stat_changes(Stat::Attack, 1);
+            defender.apply_stat_changes(Stat::Attack, 1);
+        }
+
+        if used_move.flags.get_contact() && attacker.item == Some(Item::ProtectivePads) && self.get_ability(attacker, conditions) != Ability::LongReach {
+            self.do_contact(attacker, defender, conditions);
         }
     }
 
     fn use_move(&self, used_move: &Move, using_side: &mut Side, other_side: &mut Side, conditions: &mut Conditions) {
         
+        log!("{} used {}!", using_side.get_active().name, used_move.name);
+
         let mut damage = 0;
 
         if used_move.class != MoveClass::Status {
             damage = self.calc_damage(used_move, &using_side.get_active_mut(), &other_side.get_active_mut(), conditions);
-            self.deal_damage(other_side, damage, used_move, conditions);
+            self.do_move_hit(using_side, other_side, damage, used_move, conditions);
         }
 
-        if let Some((effect, chance)) = used_move.effect {
-            if rand::random_ratio(chance as u32, 100) {
-                self.apply_effect_after_use(effect, using_side, other_side, conditions, damage);
-            }
+        let mut do_effect = true;
+
+        if let Some(chance) = used_move.effect_chance {
+            do_effect = rand::random_ratio(chance as u32, 100);
+        }
+
+        if do_effect {
+            self.apply_effect_after_use(used_move.effect, using_side, other_side, conditions, damage);
         }
     }
 
-    fn perform_action(&self, action: BattleAction, used_by_side1: bool, state: &mut BattleState) {
+    fn set_weather(&self, conditions: &mut Conditions, weather: Weather, held_item: Option<Item>, from_ability: bool) {
+        
+        if let Some((current_weather, _)) = conditions.weather {
+            if weather == current_weather || current_weather.is_strong() && !weather.is_strong() {
+                return;
+            }
+        }
 
-        let (using_side, other_side) = if used_by_side1{
-            (&mut state.side1, &mut state.side2)
+        let duration = if self.generation <= 5 && from_ability {
+            Weather::PERMANENT
+        }
+        else if matches!(weather, Weather::ExtremeSun | Weather::HeavyRain | Weather::StrongWind) {
+            Weather::PERMANENT
+        }
+        else if held_item.is_some_and(|item| matches!((weather, item), 
+            (Weather::Rain, Item::DampRock) |
+            (Weather::Sun, Item::HeatRock) |
+            (Weather::Hail, Item::IcyRock) |
+            (Weather::Sandstorm, Item::SmoothRock)
+        )) {
+            8
         }
         else {
-            (&mut state.side2, &mut state.side1)
+            5
         };
 
-        match action {
-            BattleAction::Move(move_id) => {
-                let used_move = self.data_handler.get_move(move_id);
-                self.use_move(used_move, using_side, other_side, &mut state.conditions);
+        conditions.weather = Some((weather, duration));
+
+    }
+
+    fn set_terrain(&self, conditions: &mut Conditions, terrain: Terrain, held_item: Option<Item>) {
+
+        let duration = if held_item == Some(Item::TerrainExtender) {
+            8
+        }
+        else {
+            5
+        };
+
+        conditions.terrain = Some((terrain, duration));
+
+    }
+
+    fn activate_ability(&self, side: &mut Side, other_side: &mut Side, conditions: &mut Conditions) {
+
+        let mon = side.get_active_mut();
+        let other_mon = other_side.get_active_mut();
+
+        match self.get_ability(mon, &conditions) {
+            Ability::AirLock | Ability::CloudNine => todo!(),
+            Ability::Anticipation => todo!(),
+            // Ability::AsOne => todo!(),
+            Ability::CuriousMedicine => todo!(),
+            Ability::DauntlessShield => mon.apply_stat_changes(Stat::Defense, 1), // gen 9, only once per battle
+            Ability::DeltaStream => self.set_weather(conditions, Weather::StrongWind, mon.item, true),
+            Ability::DesolateLand => conditions.weather = Some((Weather::ExtremeSun, Weather::PERMANENT)),
+            Ability::Download => {
+                // need to account for gen 4 weirdness
+                let other_mon = other_side.get_active();
+                if self.get_defense_stat(other_mon, &conditions) < self.get_special_defense_stat(other_mon, &conditions) {
+                    mon.apply_stat_changes(Stat::Attack, 1);
+                }
+                else {
+                    mon.apply_stat_changes(Stat::SpecialAttack, 1);
+                }
             }
-            BattleAction::Switch(mon_idx) =>  {
-                using_side.active_pokemon = mon_idx as usize;
+            Ability::Drizzle => self.set_weather(conditions, Weather::Rain, mon.item, true),
+            Ability::Drought | Ability::OrichalcumPulse => self.set_weather(conditions, Weather::Sun, mon.item, true),
+            Ability::ElectricSurge | Ability::HadronEngine => self.set_terrain(conditions, Terrain::Electric, mon.item),
+            Ability::Forewarn => todo!(),
+            Ability::Frisk => todo!(),
+            Ability::GrassySurge => self.set_terrain(conditions, Terrain::Grassy, mon.item),
+            Ability::Hospitality => todo!(),
+            Ability::Imposter => todo!(),
+            Ability::Intimidate => other_mon.apply_stat_changes(Stat::Attack, -1),
+            Ability::IntrepidSword => mon.apply_stat_changes(Stat::Attack, 1), // gen 9, only once per battle
+            Ability::MistySurge => self.set_terrain(conditions, Terrain::Misty, mon.item),
+            Ability::MoldBreaker => todo!(),
+            Ability::NeutralizingGas => todo!(),
+            Ability::Pressure => todo!(),
+            Ability::PrimordialSea => self.set_weather(conditions, Weather::HeavyRain, mon.item, true),
+            Ability::Protosynthesis => todo!(),
+            Ability::PsychicSurge => self.set_terrain(conditions, Terrain::Psychic, mon.item),
+            Ability::QuarkDrive => todo!(),
+            Ability::SandStream => self.set_weather(conditions, Weather::Sandstorm, mon.item, true),
+            Ability::Schooling => todo!(),
+            Ability::ScreenCleaner => todo!(),
+            Ability::ShieldsDown => todo!(),
+            Ability::SnowWarning => self.set_weather(conditions, Weather::Hail, mon.item, true),
+            Ability::SupersweetSyrup => other_mon.apply_stat_changes(Stat::Evasion, -1),
+            Ability::SupremeOverlord => todo!(),
+            Ability::Trace => {
+                mon.volatile_status.add(VolatileStatusEffect::AbilityChange(self.get_ability(other_side.get_active(), &conditions)));
+                self.activate_ability(side, other_side, conditions);
             }
-            BattleAction::Item(_) => todo!()
+            Ability::Unnerve => todo!(),
+            _ => {}
         }
     }
 
@@ -571,27 +737,27 @@ impl<'a> Simulator<'a> {
         match effect {
             ME::Sleep => target_side.try_apply_status(NonVolatileStatus::Sleep),
             ME::PoisonChance => target_side.try_apply_status(NonVolatileStatus::Poison),
-            ME::DrainHalf => using_mon.hp = using_mon.max_hp.min(using_mon.hp + move_damage / 2),
+            ME::DrainHalf => using_mon.heal(move_damage / 2),
             ME::Burn | ME::BurnChance => target_side.try_apply_status(NonVolatileStatus::Burn),
             ME::FreezeChance => target_side.try_apply_status(NonVolatileStatus::Freeze),
             ME::Paralyze | ME::ParalyzeChance => target_side.try_apply_status(NonVolatileStatus::Paralysis),
             ME::FaintUser => using_mon.hp = 0,
             ME::DreamEater => todo!(),
             ME::UseTargetsLastMove => todo!(),
-            ME::RaiseUserAttack1 => user_side.apply_stat_changes(Stat::Attack, 1),
-            ME::RaiseUserDefense1 => user_side.apply_stat_changes(Stat::Defense, 1),
-            ME::RaiseUserSpecialAttack1 => user_side.apply_stat_changes(Stat::SpecialAttack, 1),
-            //ME::RaiseUserSpecialDefense1 => using_side.apply_stat_changes(Stat::SpecialDefense, 1),
-            ME::RaiseUserSpeed1 => user_side.apply_stat_changes(Stat::Speed, 1),
+            ME::RaiseUserAttack1 => using_mon.apply_stat_changes(Stat::Attack, 1),
+            ME::RaiseUserDefense1 => using_mon.apply_stat_changes(Stat::Defense, 1),
+            ME::RaiseUserSpecialAttack1 => using_mon.apply_stat_changes(Stat::SpecialAttack, 1),
+            //ME::RaiseUserSpecialDefense1 => using_mon.apply_stat_changes(Stat::SpecialDefense, 1),
+            ME::RaiseUserSpeed1 => using_mon.apply_stat_changes(Stat::Speed, 1),
             ME::NeverMiss => todo!(),
-            ME::LowerTargetAttack1 => target_side.apply_stat_changes(Stat::Attack, -1),
-            ME::LowerTargetDefense1 => target_side.apply_stat_changes(Stat::Defense, -1),
-            // ME::LowerTargetSpecialAttack1 => using_side.apply_stat_changes(Stat::SpecialAttack, 1),
-            // ME::LowerTargetSpecialDefense1 => using_side.apply_stat_changes(Stat::SpecialDefense, 1),
-            ME::LowerTargetSpeed1 => target_side.apply_stat_changes(Stat::Speed, -1),
-            ME::LowerTargetAccuracy1 => target_side.apply_stat_changes(Stat::Accuracy, -1),
-            ME::LowerTargetEvasion1 => target_side.apply_stat_changes(Stat::Evasion, -1),
-            ME::ResetTargetStats => target_side.reset_stat_changes(),
+            ME::LowerTargetAttack1 => target_mon.apply_stat_changes(Stat::Attack, -1),
+            ME::LowerTargetDefense1 => target_mon.apply_stat_changes(Stat::Defense, -1),
+            // ME::LowerTargetSpecialAttack1 => using_mon.apply_stat_changes(Stat::SpecialAttack, 1),
+            // ME::LowerTargetSpecialDefense1 => using_mon.apply_stat_changes(Stat::SpecialDefense, 1),
+            ME::LowerTargetSpeed1 => target_mon.apply_stat_changes(Stat::Speed, -1),
+            ME::LowerTargetAccuracy1 => target_mon.apply_stat_changes(Stat::Accuracy, -1),
+            ME::LowerTargetEvasion1 => target_mon.apply_stat_changes(Stat::Evasion, -1),
+            ME::ResetTargetStats => target_mon.reset_stat_changes(),
             ME::Bide => todo!(),
             ME::ForceSwitch => todo!(),
             ME::Hit2To5Times => todo!(),
@@ -603,7 +769,6 @@ impl<'a> Simulator<'a> {
             ME::LightScreen => target_side.effects.set_light_screen(if using_mon.item == Some(Item::LightClay) {8} else {5}),
             ME::TriAttack => todo!(),
             ME::Rest => todo!(),
-            ME::OHKO => todo!(),
             ME::RazorWind => todo!(),
             ME::SuperFang => todo!(),
             ME::DragonRage => todo!(),
@@ -615,25 +780,25 @@ impl<'a> Simulator<'a> {
             ME::FocusEnergy => todo!(),
             ME::RecoilQuarter => todo!(),
             ME::Confuse | ME::ConfuseAllTargets | ME::ConfuseChance => target_mon.volatile_status.add(VolatileStatusEffect::Confusion(rand::random_range(2..=5))),
-            ME::RaiseUserAttack2 => user_side.apply_stat_changes(Stat::Attack, 2),
-            ME::RaiseUserDefense2 => user_side.apply_stat_changes(Stat::Defense, 2),
-            ME::RaiseUserSpeed2 => user_side.apply_stat_changes(Stat::Speed, 2),
-            ME::RaiseUserSpecialAttack2 => user_side.apply_stat_changes(Stat::SpecialAttack, 2),
-            ME::RaiseUserSpecialDefense2 => user_side.apply_stat_changes(Stat::SpecialDefense, 2),
+            ME::RaiseUserAttack2 => using_mon.apply_stat_changes(Stat::Attack, 2),
+            ME::RaiseUserDefense2 => using_mon.apply_stat_changes(Stat::Defense, 2),
+            ME::RaiseUserSpeed2 => using_mon.apply_stat_changes(Stat::Speed, 2),
+            ME::RaiseUserSpecialAttack2 => using_mon.apply_stat_changes(Stat::SpecialAttack, 2),
+            ME::RaiseUserSpecialDefense2 => using_mon.apply_stat_changes(Stat::SpecialDefense, 2),
             ME::Transform => todo!(),
-            ME::LowerTargetAttack2 => target_side.apply_stat_changes(Stat::Attack, 2),
-            ME::LowerTargetDefense2 => target_side.apply_stat_changes(Stat::Defense, 2),
-            ME::LowerTargetSpeed2 => target_side.apply_stat_changes(Stat::Speed, 2),
-            ME::LowerTargetSpecialAttack2 => target_side.apply_stat_changes(Stat::SpecialAttack, 2),
-            ME::LowerTargetSpecialDefense2 => target_side.apply_stat_changes(Stat::SpecialDefense, 2),
+            ME::LowerTargetAttack2 => target_mon.apply_stat_changes(Stat::Attack, 2),
+            ME::LowerTargetDefense2 => target_mon.apply_stat_changes(Stat::Defense, 2),
+            ME::LowerTargetSpeed2 => target_mon.apply_stat_changes(Stat::Speed, 2),
+            ME::LowerTargetSpecialAttack2 => target_mon.apply_stat_changes(Stat::SpecialAttack, 2),
+            ME::LowerTargetSpecialDefense2 => target_mon.apply_stat_changes(Stat::SpecialDefense, 2),
             ME::Reflect => target_side.effects.set_reflect(if using_mon.item == Some(Item::LightClay) {8} else {5}),
             ME::Poison => target_side.try_apply_status(NonVolatileStatus::Poison),
-            ME::LowerTargetAttack1Chance => target_side.apply_stat_changes(Stat::Attack, -1),
-            ME::LowerTargetDefense1Chance => target_side.apply_stat_changes(Stat::Defense, -1),
-            ME::LowerTargetSpeed1Chance => target_side.apply_stat_changes(Stat::Speed, -1),
-            ME::LowerTargetSpecialAttack1Chance => target_side.apply_stat_changes(Stat::SpecialAttack, -1),
-            ME::LowerTargetSpecialDefense1Chance => target_side.apply_stat_changes(Stat::SpecialDefense, -1),
-            ME::LowerTargetAccuracy1Chance => target_side.apply_stat_changes(Stat::Accuracy, -1),
+            ME::LowerTargetAttack1Chance => target_mon.apply_stat_changes(Stat::Attack, -1),
+            ME::LowerTargetDefense1Chance => target_mon.apply_stat_changes(Stat::Defense, -1),
+            ME::LowerTargetSpeed1Chance => target_mon.apply_stat_changes(Stat::Speed, -1),
+            ME::LowerTargetSpecialAttack1Chance => target_mon.apply_stat_changes(Stat::SpecialAttack, -1),
+            ME::LowerTargetSpecialDefense1Chance => target_mon.apply_stat_changes(Stat::SpecialDefense, -1),
+            ME::LowerTargetAccuracy1Chance => target_mon.apply_stat_changes(Stat::Accuracy, -1),
             ME::MysticalFire => todo!(),
             ME::ChargeAndFlinchChance => todo!(),
             ME::HitTwiceAndPoisonChance => todo!(),
@@ -674,7 +839,7 @@ impl<'a> Simulator<'a> {
             ME::Spikes => target_side.effects.add_spikes(),
             ME::Identify => todo!(),
             ME::PerishSong => todo!(),
-            ME::Sandstorm => conditions.weather = Some((Weather::Sandstorm, if using_mon.item == Some(Item::SmoothRock) {8} else {5})),
+            ME::Sandstorm => self.set_weather(conditions, Weather::Sandstorm, using_mon.item, false),
             ME::Endure => todo!(),
             ME::Rollout => todo!(),
             ME::Swagger => todo!(),
@@ -691,8 +856,8 @@ impl<'a> Simulator<'a> {
             ME::SonicBoom => todo!(),
             ME::Moonlight => todo!(),
             ME::HiddenPower => todo!(),
-            ME::RainDance => conditions.weather = Some((Weather::Rain, if using_mon.item == Some(Item::DampRock) {8} else {5})),
-            ME::SunnyDay => conditions.weather = Some((Weather::Sun, if using_mon.item == Some(Item::HeatRock) {8} else {5})),
+            ME::RainDance => self.set_weather(conditions, Weather::Rain, using_mon.item, false),
+            ME::SunnyDay => self.set_weather(conditions, Weather::Sun, using_mon.item, false),
             ME::RaiseUserDefense1Chance => todo!(),
             ME::RaiseUserAttack1Chance => todo!(),
             ME::RaiseAllUserStats1Chance => todo!(),
@@ -716,7 +881,7 @@ impl<'a> Simulator<'a> {
             ME::Stockpile => todo!(),
             ME::SpitUp => todo!(),
             ME::Swallow => todo!(),
-            ME::Hail => conditions.weather = Some((Weather::Hail, if using_mon.item == Some(Item::IcyRock) {8} else {5})),
+            ME::Hail => self.set_weather(conditions, Weather::Hail, using_mon.item, false),
             ME::Torment => todo!(),
             ME::Flatter => todo!(),
             ME::Memento => todo!(),
@@ -760,13 +925,16 @@ impl<'a> Simulator<'a> {
             ME::IncreasedCritAndPoisonChance => todo!(),
             ME::WaterSport => todo!(),
             ME::RaiseUserSpecialAttackSpecialDefense1 => todo!(),
-            ME::RaiseUserAttackSpeed1 => todo!(),
+            ME::DragonDance => {
+                using_mon.apply_stat_changes(Stat::Attack, 1);
+                using_mon.apply_stat_changes(Stat::Speed, 1);
+            }
             ME::Camouflage => todo!(),
             ME::Roost => todo!(),
             ME::Gravity => todo!(),
             ME::MiracleEye => todo!(),
             ME::WakeUpSlap => todo!(),
-            ME::LowerUserSpeed1 => user_side.apply_stat_changes(Stat::Speed, -1),
+            ME::LowerUserSpeed1 => using_mon.apply_stat_changes(Stat::Speed, -1),
             ME::GyroBall => todo!(),
             ME::HealingWish => todo!(),
             ME::NaturalGift => todo!(),
@@ -834,9 +1002,9 @@ impl<'a> Simulator<'a> {
             ME::AlwaysCrits => todo!(),
             ME::SplashDamage => todo!(),
             ME::QuiverDance => {
-                user_side.apply_stat_changes(Stat::SpecialAttack, 1);
-                user_side.apply_stat_changes(Stat::SpecialDefense, 1);
-                user_side.apply_stat_changes(Stat::Speed, 1);
+                using_mon.apply_stat_changes(Stat::SpecialAttack, 1);
+                using_mon.apply_stat_changes(Stat::SpecialDefense, 1);
+                using_mon.apply_stat_changes(Stat::Speed, 1);
             }
             ME::HeavySlam => todo!(),
             ME::HitIfTypesShared => todo!(),
@@ -854,11 +1022,11 @@ impl<'a> Simulator<'a> {
             ME::QuickGuard => todo!(),
             ME::AllySwitch => todo!(),
             ME::ShellSmash => {
-                user_side.apply_stat_changes(Stat::Attack, 2);
-                user_side.apply_stat_changes(Stat::SpecialAttack, 2);
-                user_side.apply_stat_changes(Stat::Speed, 2);
-                user_side.apply_stat_changes(Stat::Defense, -2);
-                user_side.apply_stat_changes(Stat::SpecialDefense, -2);
+                using_mon.apply_stat_changes(Stat::Attack, 2);
+                using_mon.apply_stat_changes(Stat::SpecialAttack, 2);
+                using_mon.apply_stat_changes(Stat::Speed, 2);
+                using_mon.apply_stat_changes(Stat::Defense, -2);
+                using_mon.apply_stat_changes(Stat::SpecialDefense, -2);
             },
             ME::HealPulse => todo!(),
             ME::SkyDrop => todo!(),
@@ -870,30 +1038,30 @@ impl<'a> Simulator<'a> {
             ME::ReflectType => todo!(),
             ME::Retaliate => todo!(),
             ME::FinalGambit => todo!(),
-            ME::TailGlow => user_side.apply_stat_changes(Stat::SpecialAttack, 3),
+            ME::TailGlow => using_mon.apply_stat_changes(Stat::SpecialAttack, 3),
             ME::Coil => {
-                user_side.apply_stat_changes(Stat::Attack, 1);
-                user_side.apply_stat_changes(Stat::Defense, 1);
-                user_side.apply_stat_changes(Stat::Accuracy, 1);
+                using_mon.apply_stat_changes(Stat::Attack, 1);
+                using_mon.apply_stat_changes(Stat::Defense, 1);
+                using_mon.apply_stat_changes(Stat::Accuracy, 1);
             },
             ME::Thief => todo!(),
             ME::WaterPledge => todo!(),
             ME::FirePledge => todo!(),
             ME::GrassPledge => todo!(),
             ME::WorkUp => {
-                user_side.apply_stat_changes(Stat::Attack, 1);
-                user_side.apply_stat_changes(Stat::SpecialAttack, 1);
+                using_mon.apply_stat_changes(Stat::Attack, 1);
+                using_mon.apply_stat_changes(Stat::SpecialAttack, 1);
             },
-            ME::CottonGuard => user_side.apply_stat_changes(Stat::Defense, 3),
+            ME::CottonGuard => using_mon.apply_stat_changes(Stat::Defense, 3),
             ME::RelicSong => todo!(),
-            ME::RockTomb => target_side.apply_stat_changes(Stat::Speed, -1),
+            ME::RockTomb => target_mon.apply_stat_changes(Stat::Speed, -1),
             ME::FreezeShock => todo!(),
             ME::IceBurn => todo!(),
             ME::Hurricane => todo!(),
             ME::VCreate => {
-                user_side.apply_stat_changes(Stat::Defense, -1);
-                user_side.apply_stat_changes(Stat::SpecialDefense, -1);
-                user_side.apply_stat_changes(Stat::Speed, -1);
+                using_mon.apply_stat_changes(Stat::Defense, -1);
+                using_mon.apply_stat_changes(Stat::SpecialDefense, -1);
+                using_mon.apply_stat_changes(Stat::Speed, -1);
             },
             ME::FlyingPress => todo!(),
             ME::Belch => todo!(),
@@ -904,10 +1072,53 @@ impl<'a> Simulator<'a> {
         }
     }
 
+    fn do_switch(&self, idx: usize, side: &mut Side, other_side: &mut Side, conditions: &mut Conditions) {
+
+        let mon = side.get_active_mut();
+
+        match self.get_ability(mon, &conditions) {
+            Ability::NaturalCure => mon.non_volatile_status = None,
+            Ability::Regenerator => mon.heal(mon.max_hp / 3),
+            _ => {}
+        }
+
+        mon.volatile_status.clear();
+
+        side.active_pokemon = idx;
+
+        self.activate_ability(side, other_side, conditions);
+
+    }
+
+    fn perform_action(&self, action: BattleAction, used_by_side1: bool, state: &mut BattleState) {
+
+        let (using_side, other_side) = if used_by_side1 {
+            (&mut state.side1, &mut state.side2)
+        }
+        else {
+            (&mut state.side2, &mut state.side1)
+        };
+
+        if using_side.get_active().hp == 0 {
+            return;
+        }
+
+        match action {
+            BattleAction::Move(move_id) => {
+                let used_move = self.data_handler.get_move(move_id);
+                self.use_move(used_move, using_side, other_side, &mut state.conditions);
+            }
+            BattleAction::Switch(mon_idx) =>  {
+                self.do_switch(mon_idx as usize, using_side, other_side, &mut state.conditions);
+            }
+            BattleAction::Item(_) => todo!()
+        }
+    }
+
     fn on_turn_end(&self, state: &mut BattleState) {
         
-        state.side1.volatile_status.decriment_counters();
-        state.side2.volatile_status.decriment_counters();
+        state.side1.get_active_mut().volatile_status.decriment_counters();
+        state.side2.get_active_mut().volatile_status.decriment_counters();
 
         state.conditions.decriment_counters();
 
@@ -915,6 +1126,8 @@ impl<'a> Simulator<'a> {
 
     pub fn simulate_turn(&self, side1_action: BattleAction, side2_action: BattleAction, state: &mut BattleState) {
         
+        log!("");
+
         let side1_pokemon = &state.side1.team[state.side1.active_pokemon];
         let side2_pokemon = &state.side2.team[state.side2.active_pokemon];
 
@@ -944,8 +1157,8 @@ impl<'a> Simulator<'a> {
 
         self.on_turn_end(state);
 
-        println!("{:#?}", state.side1);
-        println!("{:#?}", state.side2);
+        // println!("{:#?}", state.side1);
+        // println!("{:#?}", state.side2);
         
     }
 }
