@@ -3536,6 +3536,84 @@ impl Item {
     pub fn from_db_id(id: ID) -> Self {
         unsafe {std::mem::transmute(id)}
     }
+
+    pub fn is_berry(self) -> bool {
+        matches!(self, 
+            Self::CheriBerry |
+            Self::ChestoBerry |
+            Self::PechaBerry |
+            Self::RawstBerry |
+            Self::AspearBerry |
+            Self::LeppaBerry |
+            Self::OranBerry |
+            Self::PersimBerry |
+            Self::LumBerry |
+            Self::SitrusBerry |
+            Self::FigyBerry |
+            Self::WikiBerry |
+            Self::MagoBerry |
+            Self::AguavBerry |
+            Self::IapapaBerry |
+            Self::RazzBerry |
+            Self::BlukBerry |
+            Self::NanabBerry |
+            Self::WepearBerry |
+            Self::PinapBerry |
+            Self::PomegBerry |
+            Self::KelpsyBerry |
+            Self::QualotBerry |
+            Self::HondewBerry |
+            Self::GrepaBerry |
+            Self::TamatoBerry |
+            Self::CornnBerry |
+            Self::MagostBerry |
+            Self::RabutaBerry |
+            Self::NomelBerry |
+            Self::SpelonBerry |
+            Self::PamtreBerry |
+            Self::WatmelBerry |
+            Self::DurinBerry |
+            Self::BelueBerry |
+            Self::OccaBerry |
+            Self::PasshoBerry |
+            Self::WacanBerry |
+            Self::RindoBerry |
+            Self::YacheBerry |
+            Self::ChopleBerry |
+            Self::KebiaBerry |
+            Self::ShucaBerry |
+            Self::CobaBerry |
+            Self::PayapaBerry |
+            Self::TangaBerry |
+            Self::ChartiBerry |
+            Self::KasibBerry |
+            Self::HabanBerry |
+            Self::ColburBerry |
+            Self::BabiriBerry |
+            Self::ChilanBerry |
+            Self::LiechiBerry |
+            Self::GanlonBerry |
+            Self::SalacBerry |
+            Self::PetayaBerry |
+            Self::ApicotBerry |
+            Self::LansatBerry |
+            Self::StarfBerry |
+            Self::EnigmaBerry |
+            Self::MicleBerry |
+            Self::CustapBerry |
+            Self::JabocaBerry |
+            Self::RowapBerry |
+            Self::RoseliBerry |
+            Self::KeeBerry |
+            Self::MarangaBerry |
+            Self::SilverRazzBerry |
+            Self::GoldenRazzBerry |
+            Self::SilverNanabBerry |
+            Self::GoldenNanabBerry |
+            Self::SilverPinapBerry |
+            Self::GoldenPinapBerry
+        )
+    }
 }
 
 #[repr(u8)]

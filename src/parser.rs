@@ -156,7 +156,7 @@ pub fn parse_showdown(showdown_export_lines: &[&str], data_handler: &DataHandler
         name: name.into(),
         level,
         ability,
-        item: held_item,
+        item_state: held_item,
         max_hp: hp,
         hp,
         attack,

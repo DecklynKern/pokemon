@@ -2,6 +2,7 @@
 #![feature(never_type)]
 #![feature(tuple_trait)]
 #![feature(concat_idents)]
+#![feature(let_chains)]
 
 #[macro_use]
 mod bitfield;

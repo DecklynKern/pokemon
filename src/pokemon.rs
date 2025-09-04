@@ -105,7 +105,7 @@ pub struct Pokemon {
     pub moves: [Option<ID>; 4],
     pub non_volatile_status: Option<NonVolatileStatus>,
     pub volatile_status: VolatileStatus,
-    pub item: Option<Item>,
+    pub item_state: ItemState,
     pub gender: Gender,
     pub friendship: u8
 }
@@ -137,12 +137,20 @@ impl Pokemon {
         self.volatile_status.stat_stages.fill(0);
     }
 
-    pub fn deal_damage(&mut self, damage: u16) {
+    pub fn hurt(&mut self, damage: u16) {
         self.hp = self.hp.saturating_sub(damage);
+    }
+
+    pub fn hurt_fraction(&mut self, denom: u16) {
+        self.heal((self.max_hp / denom).max(1));
     }
 
     pub fn heal(&mut self, hp: u16) {
         self.hp = self.max_hp.min(self.hp + hp);
+    }
+
+    pub fn heal_fraction(&mut self, denom: u16) {
+        self.heal((self.max_hp / denom).max(1));
     }
     
     pub fn get_stat(&self, stat: Stat) -> u16 {
@@ -170,6 +178,33 @@ impl Pokemon {
         stat_val
 
     }
+
+    pub fn get_item(&self) -> Option<Item> {
+        match self.item_state {
+            ItemState::Exists(item) => Some(item),
+            _ => None
+        }
+    }
+
+    pub fn use_item(&mut self) {
+        self. item_state = match self.item_state {
+            ItemState::Exists(item) => ItemState::Used(item),
+            state => state // shouldn't happen
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ItemState {
+    Exists(Item),
+    Used(Item),
+    KnockedOff(Item),
+    Flung(Item),
+    NaturalGifted(Item),
+    Incinerated(Item),
+    BugBitten(Item),
+    Plucked(Item),
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -269,7 +304,7 @@ pub enum VolatileStatusEffect {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Stat {
     Attack,
     Defense,
